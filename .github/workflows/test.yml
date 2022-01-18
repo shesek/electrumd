@@ -10,7 +10,7 @@ jobs:
   test:
     runs-on: ${{ matrix.os }}
     env:
-      RUST_LOG: bitcoind=debug
+      RUST_LOG: electrumd=debug
     strategy:
       fail-fast: false
       matrix:
@@ -37,7 +37,7 @@ jobs:
         with:
           command: test
           args: --features ${{ matrix.feature }}
-      - run: echo "BITCOIND_EXE=$(find ./target/debug -name bitcoind)" >> $GITHUB_ENV
+      - run: echo "ELECTRUMD_EXE=$(find ./target/debug -name electrum.AppImage)" >> $GITHUB_ENV
       - uses: actions-rs/cargo@v1
         with:
           command: test

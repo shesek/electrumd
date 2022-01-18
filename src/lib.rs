@@ -1,37 +1,36 @@
 #![deny(missing_docs)]
 
 //!
-//! Bitcoind
+//! ElectrumD
 //!
-//! Utility to run a regtest bitcoind process, useful in integration testing environment
+//! Utility to run an headless Electrum wallet process, useful in integration testing environment
 //!
 //! ```no_run
-//! use bitcoincore_rpc::RpcApi;
-//! let bitcoind = bitcoind::BitcoinD::new("/usr/local/bin/bitcoind").unwrap();
-//! assert_eq!(0, bitcoind.client.get_blockchain_info().unwrap().blocks);
+//! let electrumd = electrumd::ElectrumD::new("/usr/local/bin/electrum.AppImage").unwrap();
+//! println!("{}", electrumd.call("version", &[]).unwrap().as_str().unwrap());
 //! ```
 
 mod versions;
 
-use crate::bitcoincore_rpc::jsonrpc::serde_json::Value;
-use bitcoincore_rpc::{Auth, Client, RpcApi};
+use jsonrpc::serde_json::{self, Value};
+use jsonrpc::Client;
 use log::debug;
-use std::ffi::OsStr;
-use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::Duration;
 use std::{env, fmt, thread};
+use std::{ffi::OsStr, fs};
 use tempfile::TempDir;
 
-pub extern crate bitcoincore_rpc;
+pub extern crate jsonrpc;
 pub extern crate tempfile;
 
-/// Struct representing the bitcoind process with related information
-pub struct BitcoinD {
+/// Struct representing the electrum process with related information
+pub struct ElectrumD {
     /// Process child handle, used to terminate the process when this struct is dropped
     process: Child,
-    /// Rpc client linked to this bitcoind process
+    /// Rpc client linked to this electrum process
     pub client: Client,
     /// Work directory, where the node store blocks and other stuff. It is kept in the struct so that
     /// directory is deleted only when this struct is dropped
@@ -46,33 +45,20 @@ pub struct BitcoinD {
 pub struct ConnectParams {
     /// Path to the node datadir
     pub datadir: PathBuf,
-    /// Path to the node cookie file, useful for other client to connect to the node
-    pub cookie_file: PathBuf,
-    /// Url of the rpc of the node, useful for other client to connect to the node
+    /// Url of the rpc of the wallet rpc
     pub rpc_socket: SocketAddrV4,
-    /// p2p connection url, is some if the node started with p2p enabled
-    pub p2p_socket: Option<SocketAddrV4>,
-}
-
-/// Enum to specify p2p settings
-#[derive(Debug, PartialEq, Eq)]
-pub enum P2P {
-    /// the node doesn't open a p2p port and work in standalone mode
-    No,
-    /// the node open a p2p port
-    Yes,
-    /// The node open a p2p port and also connects to the url given as parameter, it's handy to
-    /// initialize this with [BitcoinD::p2p_connect] of another node. The `bool` parameter indicates
-    /// if the node can accept connection too.
-    Connect(SocketAddrV4, bool),
 }
 
 /// All the possible error in this crate
 pub enum Error {
     /// Wrapper of io Error
     Io(std::io::Error),
-    /// Wrapper of bitcoincore_rpc Error
-    Rpc(bitcoincore_rpc::Error),
+    /// Wrapper of jsonrpc Error
+    Rpc(jsonrpc::Error),
+    /// Wrapper for jsonrpc simple_http errors
+    RpcSimpleHttp(jsonrpc::simple_http::Error),
+    /// Wrapper for serde json errors
+    Json(serde_json::Error),
     /// Returned when calling methods requiring a feature to be activated, but it's not
     NoFeature,
     /// Returned when calling methods requiring a env var to exist, but it's not
@@ -88,10 +74,12 @@ impl fmt::Debug for Error {
         match self {
             Error::Io(e) => write!(f, "{:?}", e),
             Error::Rpc(e) => write!(f, "{:?}", e),
+            Error::RpcSimpleHttp(e) => write!(f, "{:?}", e),
+            Error::Json(e) => write!(f, "{:?}", e),
             Error::NoFeature => write!(f, "Called a method requiring a feature to be set, but it's not"),
-            Error::NoEnvVar => write!(f, "Called a method requiring env var `BITCOIND_EXE` to be set, but it's not"),
-            Error::NeitherFeatureNorEnvVar =>  write!(f, "Called a method requiring env var `BITCOIND_EXE` or a feature to be set, but neither are set"),
-            Error::BothFeatureAndEnvVar => write!(f, "Called a method requiring env var `BITCOIND_EXE` or a feature to be set, but both are set"),
+            Error::NoEnvVar => write!(f, "Called a method requiring env var `ELECTRUMD_EXE` to be set, but it's not"),
+            Error::NeitherFeatureNorEnvVar =>  write!(f, "Called a method requiring env var `ELECTRUMD_EXE` or a feature to be set, but neither are set"),
+            Error::BothFeatureAndEnvVar => write!(f, "Called a method requiring env var `ELECTRUMD_EXE` or a feature to be set, but both are set"),
         }
     }
 }
@@ -114,28 +102,21 @@ const LOCAL_IP: Ipv4Addr = Ipv4Addr::new(127, 0, 0, 1);
 ///
 /// Default values:
 /// ```
-/// let mut conf = bitcoind::Conf::default();
-/// conf.args = vec!["-regtest", "-fallbackfee=0.0001"];
+/// let mut conf = electrumd::Conf::default();
 /// conf.view_stdout = false;
-/// conf.p2p = bitcoind::P2P::No;
 /// conf.network = "regtest";
 /// conf.tmpdir = None;
-/// assert_eq!(conf, bitcoind::Conf::default());
+/// assert_eq!(conf, electrumd::Conf::default());
 /// ```
 ///
 #[non_exhaustive]
 #[derive(Debug, PartialEq, Eq)]
 pub struct Conf<'a> {
-    /// Bitcoind command line arguments containing no spaces like `vec!["-dbcache=300", "-regtest"]`
-    /// note that `port`, `rpcport`, `connect`, `datadir`, `listen`
-    /// cannot be used because they are automatically initialized.
+    /// Electrum command line arguments containing no spaces like `vec!["--oneserver"]`
     pub args: Vec<&'a str>,
 
-    /// if `true` bitcoind log output will not be suppressed
+    /// if `true` electrum log output will not be suppressed
     pub view_stdout: bool,
-
-    /// Allows to specify options to open p2p port or connect to the another node
-    pub p2p: P2P,
 
     /// Must match what specified in args without dashes, needed to locate the cookie file
     /// directory with different/esoteric networks
@@ -144,7 +125,7 @@ pub struct Conf<'a> {
     /// Optionally specify the root of where the temporary directories will be created.
     /// If none and the env var `TEMPDIR_ROOT` is set, the env var is used.
     /// If none and the env var `TEMPDIR_ROOT` is not set, the default temp dir of the OS is used.
-    /// It may be useful for example to set to a ramdisk so that bitcoin nodes spawn very fast
+    /// It may be useful for example to set to a ramdisk so that electrum wallets spawn very fast
     /// because their datadirs are in RAM
     pub tmpdir: Option<PathBuf>,
 }
@@ -152,25 +133,24 @@ pub struct Conf<'a> {
 impl Default for Conf<'_> {
     fn default() -> Self {
         Conf {
-            args: vec!["-regtest", "-fallbackfee=0.0001"],
+            args: vec![],
             view_stdout: false,
-            p2p: P2P::No,
             network: "regtest",
             tmpdir: None,
         }
     }
 }
 
-impl BitcoinD {
-    /// Launch the bitcoind process from the given `exe` executable with default args.
+impl ElectrumD {
+    /// Launch the electrum process from the given `exe` executable with default args.
     ///
     /// Waits for the node to be ready to accept connections before returning
-    pub fn new<S: AsRef<OsStr>>(exe: S) -> Result<BitcoinD, Error> {
-        BitcoinD::with_conf(exe, &Conf::default())
+    pub fn new<S: AsRef<OsStr>>(exe: S) -> Result<ElectrumD, Error> {
+        ElectrumD::with_conf(exe, &Conf::default())
     }
 
-    /// Launch the bitcoind process from the given `exe` executable with given [Conf] param
-    pub fn with_conf<S: AsRef<OsStr>>(exe: S, conf: &Conf) -> Result<BitcoinD, Error> {
+    /// Launch the electrum process from the given `exe` executable with given [Conf] param
+    pub fn with_conf<S: AsRef<OsStr>>(exe: S, conf: &Conf) -> Result<ElectrumD, Error> {
         let work_dir = match &conf.tmpdir {
             Some(path) => TempDir::new_in(path),
             None => match env::var("TEMPDIR_ROOT") {
@@ -179,86 +159,99 @@ impl BitcoinD {
             },
         }?;
         debug!("work_dir: {:?}", work_dir);
+
         let datadir = work_dir.path().to_path_buf();
-        let cookie_file = datadir.join(conf.network).join(".cookie");
-        let rpc_port = get_available_port()?;
-        let rpc_socket = SocketAddrV4::new(LOCAL_IP, rpc_port);
-        let rpc_url = format!("http://{}", rpc_socket);
-        let (p2p_args, p2p_socket) = match conf.p2p {
-            P2P::No => (vec!["-listen=0".to_string()], None),
-            P2P::Yes => {
-                let p2p_port = get_available_port()?;
-                let p2p_socket = SocketAddrV4::new(LOCAL_IP, p2p_port);
-                let p2p_arg = format!("-port={}", p2p_port);
-                let args = vec![p2p_arg];
-                (args, Some(p2p_socket))
-            }
-            P2P::Connect(other_node_url, listen) => {
-                let p2p_port = get_available_port()?;
-                let p2p_socket = SocketAddrV4::new(LOCAL_IP, p2p_port);
-                let p2p_arg = format!("-port={}", p2p_port);
-                let connect = format!("-connect={}", other_node_url);
-                let mut args = vec![p2p_arg, connect];
-                if listen {
-                    args.push("-listen=1".to_string())
-                }
-                (args, Some(p2p_socket))
-            }
-        };
+        let network_subdir = datadir.join(conf.network);
+        let wallet_path = network_subdir.clone().join("wallets").join("wallet1");
+        let config_path = network_subdir.clone().join("config");
+
+        fs::create_dir_all(&network_subdir)?;
+        fs::create_dir_all(wallet_path.parent().unwrap())?;
+        fs::write(
+            config_path,
+            serde_json::json!({
+                "log_to_file": true,
+            })
+            .to_string(),
+        )?;
+
+
         let stdout = if conf.view_stdout {
             Stdio::inherit()
         } else {
             Stdio::null()
         };
 
-        let datadir_arg = format!("-datadir={}", datadir.display());
-        let rpc_arg = format!("-rpcport={}", rpc_port);
-        let default_args = [&datadir_arg, &rpc_arg];
-
-        debug!(
-            "launching {:?} with args: {:?} {:?} AND custom args",
-            exe.as_ref(),
-            default_args,
-            p2p_args
-        );
+        debug!("launching {:?} in {:?}", exe.as_ref(), datadir);
         let process = Command::new(exe)
-            .args(&default_args)
-            .args(&p2p_args)
+            .args(&["daemon", "-d", "--dir", datadir.to_str().unwrap()])
+            .args(&[format!("--{}", conf.network)])
             .args(&conf.args)
             .stdout(stdout)
             .spawn()?;
 
-        let node_url_default = format!("{}/wallet/default", rpc_url);
-        // wait bitcoind is ready, use default wallet
-        let client = loop {
-            thread::sleep(Duration::from_millis(500));
+        debug!("launched process");
+
+        let daemon_file_path = network_subdir.join("daemon");
+
+        // Grab the RPC port number from the `daemon` file once it appears
+        let rpc_port = loop {
+            thread::sleep(Duration::from_millis(250));
             assert!(process.stderr.is_none());
-            let client_result = Client::new(&rpc_url, Auth::CookieFile(cookie_file.clone()));
-            if let Ok(client_base) = client_result {
-                // RpcApi has get_blockchain_info method, however being generic with `Value` allows
-                // to be compatible with different version, in the end we are only interested if
-                // the call is succesfull not in the returned value.
-                if client_base.call::<Value>("getblockchaininfo", &[]).is_ok() {
-                    client_base
-                        .create_wallet("default", None, None, None, None)
-                        .unwrap();
-                    break Client::new(&node_url_default, Auth::CookieFile(cookie_file.clone()))
-                        .unwrap();
-                }
+
+            if let Ok(contents) = fs::read_to_string(&daemon_file_path) {
+                let port = contents
+                    .chars()
+                    .skip(15)
+                    .take_while(|c| *c != ')')
+                    .collect::<String>();
+                break port
+                    .parse::<u16>()
+                    .expect("a valid port number in the daemon file");
             }
         };
+        let rpc_url = format!("http://{}:{}/", LOCAL_IP, rpc_port);
+        // Grab the randomly generated credentials from the config file
+        let rpc_config = fs::read_to_string(network_subdir.join("config"))
+            .expect("config file to exists")
+            .parse::<Value>()
+            .expect("config file to be valid json");
+        let rpc_user = rpc_config["rpcuser"]
+            .as_str()
+            .expect("rpcuser to exists")
+            .to_string();
+        let rpc_pass = rpc_config["rpcpassword"]
+            .as_str()
+            .expect("rpcpassword to exists")
+            .to_string();
 
-        Ok(BitcoinD {
+        let client = Client::simple_http(&rpc_url, Some(rpc_user), Some(rpc_pass))?;
+
+        //let builder = jsonrpc::simple_http::Builder::new().url(&rpc_url)?
+        //    .auth(rpc_user, Some(rpc_pass))
+        //    .timeout(std::time::Duration::from_secs(3));
+        //let client = Client::with_transport(builder.build());
+
+        let _wallet: Value = client.call("create", &[])?;
+
+        Ok(ElectrumD {
             process,
             client,
             _work_dir: work_dir,
             params: ConnectParams {
                 datadir,
-                cookie_file,
-                rpc_socket,
-                p2p_socket,
+                rpc_socket: SocketAddrV4::new(LOCAL_IP, rpc_port),
             },
         })
+    }
+
+    /// Call the RPC method with the given args
+    pub fn call(&self, method: &str, args: &[Value]) -> Result<Value, Error> {
+        let args = args
+            .iter()
+            .map(serde_json::value::to_raw_value)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(self.client.call(method, &args)?)
     }
 
     /// Returns the rpc URL including the schema eg. http://127.0.0.1:44842
@@ -266,55 +259,17 @@ impl BitcoinD {
         format!("http://{}", self.params.rpc_socket)
     }
 
-    #[cfg(not(any(feature = "0_17_1", feature = "0_18_0", feature = "0_18_1")))]
-    /// Returns the rpc URL including the schema and the given `wallet_name`
-    /// eg. http://127.0.0.1:44842/wallet/my_wallet
-    pub fn rpc_url_with_wallet<T: AsRef<str>>(&self, wallet_name: T) -> String {
-        format!(
-            "http://{}/wallet/{}",
-            self.params.rpc_socket,
-            wallet_name.as_ref()
-        )
-    }
-
-    /// Returns the [P2P] enum to connect to this node p2p port
-    pub fn p2p_connect(&self, listen: bool) -> Option<P2P> {
-        self.params.p2p_socket.map(|s| P2P::Connect(s, listen))
-    }
-
     /// Stop the node, waiting correct process termination
     pub fn stop(&mut self) -> Result<ExitStatus, Error> {
-        self.client.stop()?;
+        self.client.call("stop", &[])?;
         Ok(self.process.wait()?)
-    }
-
-    #[cfg(not(any(feature = "0_17_1", feature = "0_18_0", feature = "0_18_1")))]
-    /// Create a new wallet in the running node, and return an RPC client connected to the just
-    /// created wallet
-    pub fn create_wallet<T: AsRef<str>>(&self, wallet: T) -> Result<Client, Error> {
-        let _ = self
-            .client
-            .create_wallet(wallet.as_ref(), None, None, None, None)?;
-        Ok(Client::new(
-            &self.rpc_url_with_wallet(wallet),
-            Auth::CookieFile(self.params.cookie_file.clone()),
-        )?)
     }
 }
 
-impl Drop for BitcoinD {
+impl Drop for ElectrumD {
     fn drop(&mut self) {
         let _ = self.process.kill();
     }
-}
-
-/// Returns a non-used local port if available.
-///
-/// Note there is a race condition during the time the method check availability and the caller
-pub fn get_available_port() -> Result<u16, Error> {
-    // using 0 as port let the system assign a port available
-    let t = TcpListener::bind(("127.0.0.1", 0))?; // 0 means the OS choose a free port
-    Ok(t.local_addr().map(|s| s.port())?)
 }
 
 impl From<std::io::Error> for Error {
@@ -323,17 +278,29 @@ impl From<std::io::Error> for Error {
     }
 }
 
-impl From<bitcoincore_rpc::Error> for Error {
-    fn from(e: bitcoincore_rpc::Error) -> Self {
+impl From<jsonrpc::Error> for Error {
+    fn from(e: jsonrpc::Error) -> Self {
         Error::Rpc(e)
     }
 }
 
-/// Provide the bitcoind executable path if a version feature has been specified
+impl From<jsonrpc::simple_http::Error> for Error {
+    fn from(e: jsonrpc::simple_http::Error) -> Self {
+        Error::RpcSimpleHttp(e)
+    }
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(e: serde_json::Error) -> Self {
+        Error::Json(e)
+    }
+}
+
+/// Provide the electrum executable path if a version feature has been specified
 pub fn downloaded_exe_path() -> Result<String, Error> {
     if versions::HAS_FEATURE {
         Ok(format!(
-            "{}/bitcoin/bitcoin-{}/bin/bitcoind",
+            "{}/electrum/electrum-{}/electrum.AppImage",
             env!("OUT_DIR"),
             versions::VERSION
         ))
@@ -342,10 +309,10 @@ pub fn downloaded_exe_path() -> Result<String, Error> {
     }
 }
 
-/// Returns the daemon executable path if it's provided as a feature or as `BITCOIND_EXE` env var.
+/// Returns the daemon executable path if it's provided as a feature or as `ELECTRUMD_EXE` env var.
 /// Returns error if none or both are set
 pub fn exe_path() -> Result<String, Error> {
-    match (downloaded_exe_path(), std::env::var("BITCOIND_EXE")) {
+    match (downloaded_exe_path(), std::env::var("ELECTRUMD_EXE")) {
         (Ok(_), Ok(_)) => Err(Error::BothFeatureAndEnvVar),
         (Ok(path), Err(_)) => Ok(path),
         (Err(_), Ok(path)) => Ok(path),
@@ -355,153 +322,16 @@ pub fn exe_path() -> Result<String, Error> {
 
 #[cfg(test)]
 mod test {
-    use crate::bitcoincore_rpc::jsonrpc::serde_json::Value;
-    use crate::bitcoincore_rpc::Client;
-    use crate::exe_path;
-    use crate::{get_available_port, BitcoinD, Conf, LOCAL_IP, P2P};
-    use bitcoincore_rpc::RpcApi;
-    use std::net::SocketAddrV4;
+    use super::*;
 
     #[test]
-    fn test_local_ip() {
-        assert_eq!("127.0.0.1", format!("{}", LOCAL_IP));
-        let port = get_available_port().unwrap();
-        let socket = SocketAddrV4::new(LOCAL_IP, port);
-        assert_eq!(format!("127.0.0.1:{}", port), format!("{}", socket));
-    }
-
-    #[test]
-    fn test_bitcoind() {
+    fn test_electrumd() {
         let exe = init();
         println!("{}", exe);
-        let bitcoind = BitcoinD::new(exe).unwrap();
-        let info = bitcoind.client.get_blockchain_info().unwrap();
-        assert_eq!(0, info.blocks);
-        let address = bitcoind.client.get_new_address(None, None).unwrap();
-        let _ = bitcoind.client.generate_to_address(1, &address).unwrap();
-        let info = bitcoind.client.get_blockchain_info().unwrap();
-        assert_eq!(1, info.blocks);
-    }
 
-    #[test]
-    #[cfg(any(feature = "0_21_0", feature = "0_21_1"))]
-    fn test_getindexinfo() {
-        let exe = init();
-        let mut conf = Conf::default();
-        conf.args.push("-txindex");
-        let bitcoind = BitcoinD::with_conf(&exe, &conf).unwrap();
-        assert!(
-            bitcoind.client.version().unwrap() >= 210_000,
-            "getindexinfo requires bitcoin >0.21"
-        );
-        let info: std::collections::HashMap<String, bitcoincore_rpc::jsonrpc::serde_json::Value> =
-            bitcoind.client.call("getindexinfo", &[]).unwrap();
-        assert!(info.contains_key("txindex"));
-        assert!(bitcoind.client.version().unwrap() >= 210_000);
-    }
-
-    #[test]
-    fn test_p2p() {
-        let exe = init();
-        let mut conf = Conf::default();
-        conf.p2p = P2P::Yes;
-
-        let bitcoind = BitcoinD::with_conf(&exe, &conf).unwrap();
-        assert_eq!(peers_connected(&bitcoind.client), 0);
-        let mut other_conf = Conf::default();
-        other_conf.p2p = bitcoind.p2p_connect(false).unwrap();
-
-        let other_bitcoind = BitcoinD::with_conf(&exe, &other_conf).unwrap();
-        assert_eq!(peers_connected(&bitcoind.client), 1);
-        assert_eq!(peers_connected(&other_bitcoind.client), 1);
-    }
-
-    #[test]
-    fn test_multi_p2p() {
-        let mut conf_node1 = Conf::default();
-        conf_node1.p2p = P2P::Yes;
-        let node1 = BitcoinD::with_conf(exe_path().unwrap(), &conf_node1).unwrap();
-
-        // Create Node 2 connected Node 1
-        let mut conf_node2 = Conf::default();
-        conf_node2.p2p = node1.p2p_connect(true).unwrap();
-        let node2 = BitcoinD::with_conf(exe_path().unwrap(), &conf_node2).unwrap();
-
-        // Create Node 3 Connected To Node
-        let mut conf_node3 = Conf::default();
-        conf_node3.p2p = node2.p2p_connect(false).unwrap();
-        let node3 = BitcoinD::with_conf(exe_path().unwrap(), &conf_node3).unwrap();
-
-        // Get each nodes Peers
-        let node1_peers = peers_connected(&node1.client);
-        let node2_peers = peers_connected(&node2.client);
-        let node3_peers = peers_connected(&node3.client);
-
-        // Peers found
-        assert!(node1_peers >= 1);
-        assert!(node2_peers >= 1);
-        assert_eq!(node3_peers, 1, "listen false but more than 1 peer");
-    }
-
-    #[cfg(not(any(feature = "0_17_1", feature = "0_18_0", feature = "0_18_1")))]
-    #[test]
-    fn test_multi_wallet() {
-        use bitcoincore_rpc::bitcoin::Amount;
-        let exe = init();
-        let bitcoind = BitcoinD::new(exe).unwrap();
-        let alice = bitcoind.create_wallet("alice").unwrap();
-        let alice_address = alice.get_new_address(None, None).unwrap();
-        let bob = bitcoind.create_wallet("bob").unwrap();
-        let bob_address = bob.get_new_address(None, None).unwrap();
-        bitcoind
-            .client
-            .generate_to_address(1, &alice_address)
-            .unwrap();
-        bitcoind
-            .client
-            .generate_to_address(101, &bob_address)
-            .unwrap();
-        assert_eq!(
-            Amount::from_btc(50.0).unwrap(),
-            alice.get_balances().unwrap().mine.trusted
-        );
-        assert_eq!(
-            Amount::from_btc(50.0).unwrap(),
-            bob.get_balances().unwrap().mine.trusted
-        );
-        assert_eq!(
-            Amount::from_btc(5000.0).unwrap(),
-            bob.get_balances().unwrap().mine.immature
-        );
-        alice
-            .send_to_address(
-                &bob_address,
-                Amount::from_btc(1.0).unwrap(),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .unwrap();
-        assert!(
-            alice.get_balances().unwrap().mine.trusted < Amount::from_btc(49.0).unwrap()
-                && alice.get_balances().unwrap().mine.trusted > Amount::from_btc(48.9).unwrap()
-        );
-        assert_eq!(
-            Amount::from_btc(1.0).unwrap(),
-            bob.get_balances().unwrap().mine.untrusted_pending
-        );
-        assert!(
-            bitcoind.create_wallet("bob").is_err(),
-            "wallet already exist"
-        );
-    }
-
-    fn peers_connected(client: &Client) -> usize {
-        let result: Vec<Value> = client.call("getpeerinfo", &[]).unwrap();
-        result.len()
+        let electrumd = ElectrumD::new(exe).unwrap();
+        let version = electrumd.call("version", &[]).unwrap();
+        assert_eq!(version.as_str(), Some(versions::VERSION));
     }
 
     fn init() -> String {

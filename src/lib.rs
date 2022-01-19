@@ -163,7 +163,10 @@ impl ElectrumD {
 
         let datadir = work_dir.path().to_path_buf();
         let network_subdir = datadir.join(conf.network);
-        let wallet_path = network_subdir.clone().join("wallets").join("wallet1");
+        let wallet_path = network_subdir
+            .clone()
+            .join("wallets")
+            .join("default_wallet");
         let config_path = network_subdir.clone().join("config");
 
         fs::create_dir_all(&network_subdir)?;
@@ -234,8 +237,8 @@ impl ElectrumD {
 
         let noargs = jsonrpc::empty_args();
         let _wallet: Value = client.call("create", &noargs)?;
-        let params = arg(&json!({"wallet_path":"default_wallet"}));
-        let _wallet: Value = client.call("load_wallet", &params)?;
+        let _loaded: Value =
+            client.call("load_wallet", &arg(&json!({ "wallet_path": wallet_path })))?;
 
         Ok(ElectrumD {
             process,

@@ -6,14 +6,15 @@
 //! Utility to run an headless Electrum wallet process, useful in integration testing environment
 //!
 //! ```no_run
+//! use jsonrpc::serde_json;
 //! let electrumd = electrumd::ElectrumD::new("/usr/local/bin/electrum.AppImage").unwrap();
-//! println!("{}", electrumd.call("version", &[]).unwrap().as_str().unwrap());
+//! println!("{}", electrumd.call("version", &serde_json::json!([])).unwrap().as_str().unwrap());
 //! ```
 
 mod versions;
 
-use jsonrpc::serde_json::{self, Value};
-use jsonrpc::Client;
+use jsonrpc::serde_json::{self, json, value::to_raw_value, Value};
+use jsonrpc::{arg, Client};
 use log::debug;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::PathBuf;
@@ -169,12 +170,11 @@ impl ElectrumD {
         fs::create_dir_all(wallet_path.parent().unwrap())?;
         fs::write(
             config_path,
-            serde_json::json!({
+            json!({
                 "log_to_file": true,
             })
             .to_string(),
         )?;
-
 
         let stdout = if conf.view_stdout {
             Stdio::inherit()
@@ -225,14 +225,17 @@ impl ElectrumD {
             .expect("rpcpassword to exists")
             .to_string();
 
-        let client = Client::simple_http(&rpc_url, Some(rpc_user), Some(rpc_pass))?;
+        //let client = Client::simple_http(&rpc_url, Some(rpc_user), Some(rpc_pass))?;
 
-        //let builder = jsonrpc::simple_http::Builder::new().url(&rpc_url)?
-        //    .auth(rpc_user, Some(rpc_pass))
-        //    .timeout(std::time::Duration::from_secs(3));
-        //let client = Client::with_transport(builder.build());
+        let builder = jsonrpc::simple_http::Builder::new()
+            .url(&rpc_url)?
+            .auth(rpc_user, Some(rpc_pass));
+        let client = Client::with_transport(builder.build());
 
-        let _wallet: Value = client.call("create", &[])?;
+        let noargs = jsonrpc::empty_args();
+        let _wallet: Value = client.call("create", &noargs)?;
+        let params = arg(&json!({"wallet_path":"default_wallet"}));
+        let _wallet: Value = client.call("load_wallet", &params)?;
 
         Ok(ElectrumD {
             process,
@@ -246,11 +249,8 @@ impl ElectrumD {
     }
 
     /// Call the RPC method with the given args
-    pub fn call(&self, method: &str, args: &[Value]) -> Result<Value, Error> {
-        let args = args
-            .iter()
-            .map(serde_json::value::to_raw_value)
-            .collect::<Result<Vec<_>, _>>()?;
+    pub fn call(&self, method: &str, args: &Value) -> Result<Value, Error> {
+        let args = to_raw_value(args)?;
         Ok(self.client.call(method, &args)?)
     }
 
@@ -261,7 +261,8 @@ impl ElectrumD {
 
     /// Stop the node, waiting correct process termination
     pub fn stop(&mut self) -> Result<ExitStatus, Error> {
-        self.client.call("stop", &[])?;
+        let noargs = jsonrpc::empty_args();
+        self.client.call("stop", &noargs)?;
         Ok(self.process.wait()?)
     }
 }
@@ -330,7 +331,7 @@ mod test {
         println!("{}", exe);
 
         let electrumd = ElectrumD::new(exe).unwrap();
-        let version = electrumd.call("version", &[]).unwrap();
+        let version = electrumd.call("version", &serde_json::json!([])).unwrap();
         assert_eq!(version.as_str(), Some(versions::VERSION));
     }
 

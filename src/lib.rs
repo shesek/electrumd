@@ -262,16 +262,17 @@ impl ElectrumD {
         format!("http://{}", self.params.rpc_socket)
     }
 
-    /// Stop the node, waiting correct process termination
+    /// Stop the process, waiting for its termination
     pub fn stop(&mut self) -> Result<ExitStatus, Error> {
-        let noargs = jsonrpc::empty_args();
-        self.client.call("stop", &noargs)?;
+        self.call("stop", &json!([]))?;
         Ok(self.process.wait()?)
     }
 }
 
 impl Drop for ElectrumD {
+    // Kill the process immediately (SIGKILL like)
     fn drop(&mut self) {
+        let _ = self.call("stop", &json!([]));
         let _ = self.process.kill();
     }
 }

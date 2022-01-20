@@ -16,7 +16,7 @@ mod versions;
 use jsonrpc::serde_json::{self, json, value::to_raw_value, Value};
 use jsonrpc::{arg, Client};
 use log::debug;
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
 use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::Duration;
@@ -161,6 +161,9 @@ impl ElectrumD {
         }?;
         debug!("work_dir: {:?}", work_dir);
 
+        let rpc_port = get_available_port()?;
+        let rpc_pass = rand_string();
+
         let datadir = work_dir.path().to_path_buf();
         let network_subdir = datadir.join(conf.network);
         let wallet_path = network_subdir
@@ -174,6 +177,9 @@ impl ElectrumD {
         fs::write(
             config_path,
             json!({
+                "rpcport": rpc_port,
+                "rpcuser": "electrumd",
+                "rpcpassword": rpc_pass,
                 "log_to_file": true,
             })
             .to_string(),
@@ -197,45 +203,20 @@ impl ElectrumD {
 
         let daemon_file_path = network_subdir.join("daemon");
 
-        // Grab the RPC port number from the `daemon` file once it appears
-        let rpc_port = loop {
+        // Wait for the `daemon` file to appear
+        while !daemon_file_path.is_file() {
             thread::sleep(Duration::from_millis(250));
             assert!(process.stderr.is_none());
+        }
+        // Then wait some more, it can take a little longer for the TCP server to become available
+        thread::sleep(Duration::from_millis(500));
 
-            if let Ok(contents) = fs::read_to_string(&daemon_file_path) {
-                let port = contents
-                    .chars()
-                    .skip(15)
-                    .take_while(|c| *c != ')')
-                    .collect::<String>();
-                break port
-                    .parse::<u16>()
-                    .expect("a valid port number in the daemon file");
-            }
-        };
+        // Init client
         let rpc_url = format!("http://{}:{}/", LOCAL_IP, rpc_port);
-        // Grab the randomly generated credentials from the config file
-        let rpc_config = fs::read_to_string(network_subdir.join("config"))
-            .expect("config file to exists")
-            .parse::<Value>()
-            .expect("config file to be valid json");
-        let rpc_user = rpc_config["rpcuser"]
-            .as_str()
-            .expect("rpcuser to exists")
-            .to_string();
-        let rpc_pass = rpc_config["rpcpassword"]
-            .as_str()
-            .expect("rpcpassword to exists")
-            .to_string();
-
-        //let client = Client::simple_http(&rpc_url, Some(rpc_user), Some(rpc_pass))?;
-
-        let builder = jsonrpc::simple_http::Builder::new()
-            .url(&rpc_url)?
-            .auth(rpc_user, Some(rpc_pass));
-        let client = Client::with_transport(builder.build());
-
+        let client = Client::simple_http(&rpc_url, Some("electrumd".into()), Some(rpc_pass))?;
         let noargs = jsonrpc::empty_args();
+
+        // Create and load the default wallet
         let _wallet: Value = client.call("create", &noargs)?;
         let _loaded: Value =
             client.call("load_wallet", &arg(&json!({ "wallet_path": wallet_path })))?;
@@ -299,6 +280,26 @@ impl From<serde_json::Error> for Error {
     fn from(e: serde_json::Error) -> Self {
         Error::Json(e)
     }
+}
+
+/// Returns a non-used local port if available.
+///
+/// Note there is a race condition during the time the method check availability and the caller
+pub fn get_available_port() -> Result<u16, Error> {
+    // using 0 as port let the system assign a port available
+    let t = TcpListener::bind(("127.0.0.1", 0))?; // 0 means the OS choose a free port
+    Ok(t.local_addr().map(|s| s.port())?)
+}
+
+fn rand_string() -> String {
+    use rand::distributions::Alphanumeric;
+    use rand::{thread_rng, Rng};
+
+    thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(15)
+        .map(char::from)
+        .collect()
 }
 
 /// Provide the electrum executable path if a version feature has been specified

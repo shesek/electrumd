@@ -193,7 +193,7 @@ impl ElectrumD {
 
         debug!("launching {:?} in {:?}", exe.as_ref(), datadir);
         let process = Command::new(exe)
-            .args(&["daemon", "-d", "--dir", datadir.to_str().unwrap()])
+            .args(&["daemon", "--dir", datadir.to_str().unwrap()])
             .args(&[format!("--{}", conf.network)])
             .args(&conf.args)
             .stdout(stdout)
@@ -201,20 +201,16 @@ impl ElectrumD {
 
         debug!("launched process");
 
-        let daemon_file_path = network_subdir.join("daemon");
-
-        // Wait for the `daemon` file to appear
-        while !daemon_file_path.is_file() {
-            thread::sleep(Duration::from_millis(250));
-            assert!(process.stderr.is_none());
-        }
-        // Then wait some more, it can take a little longer for the TCP server to become available
-        thread::sleep(Duration::from_millis(500));
-
         // Init client
         let rpc_url = format!("http://{}:{}/", LOCAL_IP, rpc_port);
         let client = Client::simple_http(&rpc_url, Some("electrumd".into()), Some(rpc_pass))?;
         let noargs = jsonrpc::empty_args();
+
+        // Wait for the RPC server to respond
+        while client.call::<Value>("version", &noargs).is_err() {
+            thread::sleep(Duration::from_millis(250));
+            assert!(process.stderr.is_none());
+        }
 
         // Create and load the default wallet
         let _wallet: Value = client.call("create", &noargs)?;

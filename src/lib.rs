@@ -209,7 +209,7 @@ impl ElectrumD {
         // Wait for the RPC server to respond
         while client.call::<Value>("version", &noargs).is_err() {
             thread::sleep(Duration::from_millis(250));
-            assert!(process.stderr.is_none());
+            assert_eq!(process.stderr, None);
         }
 
         // Create and load the default wallet

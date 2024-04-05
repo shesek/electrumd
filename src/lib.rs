@@ -68,6 +68,8 @@ pub enum Error {
     NeitherFeatureNorEnvVar,
     /// Returned when calling methods requiring either a feature or anv var, but both are present
     BothFeatureAndEnvVar,
+    /// Returned when expecting an auto-downloaded executable but `BITCOIND_SKIP_DOWNLOAD` env var is set
+    SkipDownload,
 }
 
 impl fmt::Debug for Error {
@@ -81,6 +83,7 @@ impl fmt::Debug for Error {
             Error::NoEnvVar => write!(f, "Called a method requiring env var `ELECTRUMD_EXE` to be set, but it's not"),
             Error::NeitherFeatureNorEnvVar =>  write!(f, "Called a method requiring env var `ELECTRUMD_EXE` or a feature to be set, but neither are set"),
             Error::BothFeatureAndEnvVar => write!(f, "Called a method requiring env var `ELECTRUMD_EXE` or a feature to be set, but both are set"),
+            Error::SkipDownload => write!(f, "expecting an auto-downloaded executable but `ELECTRUMD_SKIP_DOWNLOAD` env var is set"),
         }
     }
 }
@@ -300,14 +303,16 @@ fn rand_string() -> String {
 
 /// Provide the electrum executable path if a version feature has been specified
 pub fn downloaded_exe_path() -> Result<String, Error> {
-    if versions::HAS_FEATURE {
+    if std::env::var_os("ELECTRUMD_SKIP_DOWNLOAD").is_some() {
+        Err(Error::SkipDownload)
+    } else if !versions::HAS_FEATURE {
+        Err(Error::NoFeature)
+    } else {
         Ok(format!(
             "{}/electrum/electrum-{}/electrum.AppImage",
             env!("OUT_DIR"),
             versions::VERSION
         ))
-    } else {
-        Err(Error::NoFeature)
     }
 }
 
@@ -318,7 +323,9 @@ pub fn exe_path() -> Result<String, Error> {
         (Ok(_), Ok(_)) => Err(Error::BothFeatureAndEnvVar),
         (Ok(path), Err(_)) => Ok(path),
         (Err(_), Ok(path)) => Ok(path),
-        (Err(_), Err(_)) => Err(Error::NeitherFeatureNorEnvVar),
+        (Err(Error::NoFeature), Err(_)) => Err(Error::NeitherFeatureNorEnvVar),
+        (Err(Error::SkipDownload), Err(_)) => Err(Error::SkipDownload),
+        (Err(_), Err(_)) => unreachable!(),
     }
 }
 

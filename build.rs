@@ -21,7 +21,7 @@ fn get_expected_sha256() -> Result<sha256::Hash, ()> {
 }
 
 fn main() {
-    if !HAS_FEATURE {
+    if !HAS_FEATURE || std::env::var_os("ELECTRUMD_SKIP_DOWNLOAD").is_some() {
         return;
     }
     let download_filename = download_filename();

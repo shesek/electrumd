@@ -332,8 +332,8 @@ mod test {
         println!("{}", exe);
 
         let electrumd = ElectrumD::new(exe).unwrap();
-        let version = electrumd.call("version", &serde_json::json!([])).unwrap();
-        assert_eq!(version.as_str(), Some(versions::VERSION));
+        let balance = electrumd.call("getbalance", &json!([])).unwrap();
+        assert_eq!(balance["confirmed"].as_str(), Some("0"));
     }
 
     fn init() -> String {

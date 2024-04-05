@@ -15,10 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ ubuntu-20.04 ]
-        feature: [ "22_0", "0_21_1", "0_21_0", "0_20_1", "0_20_0", "0_19_1", "0_19_0_1", "0_18_1", "0_18_0", "0_17_1"]
-        include:
-          - os: "macos-10.15"
-            feature: "0_21_1"
+        feature: [ "4_1_5" ]
 
     steps:
       - run: df -h
@@ -41,7 +38,6 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: test
-        if: ${{ matrix.feature != '0_18_1' &&  matrix.feature != '0_18_0' && matrix.feature != '0_17_1' }} # would fail `test_multi_wallet`
 
 
   cosmetics:

@@ -1,9 +1,9 @@
 use bitcoin_hashes::{sha256, Hash};
 use std::fs;
 use std::io::Read;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::str::FromStr;
-use std::os::unix::fs::PermissionsExt;
 
 include!("src/versions.rs");
 
@@ -63,4 +63,3 @@ fn main() {
         fs::set_permissions(&filepath, perms).unwrap();
     }
 }
-

@@ -193,7 +193,7 @@ impl ElectrumD {
 
         debug!("launching {:?} in {:?}", exe.as_ref(), datadir);
         let process = Command::new(exe)
-            .args(&["daemon", "--dir", datadir.to_str().unwrap()])
+            .args(["daemon", "--dir", datadir.to_str().unwrap()])
             .args(&[format!("--{}", conf.network)])
             .args(&conf.args)
             .stdout(stdout)
@@ -215,7 +215,7 @@ impl ElectrumD {
         // Create and load the default wallet
         let _wallet: Value = client.call("create", &noargs)?;
         let _loaded: Value =
-            client.call("load_wallet", &arg(&json!({ "wallet_path": wallet_path })))?;
+            client.call("load_wallet", &arg(json!({ "wallet_path": wallet_path })))?;
 
         Ok(ElectrumD {
             process,

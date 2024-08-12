@@ -23,4 +23,5 @@ bitcoin_hashes = "0.10"
 
 [features]
 "4_1_5" = []
+"4_5_4" = []
 

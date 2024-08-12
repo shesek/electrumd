@@ -15,7 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ ubuntu-20.04 ]
-        feature: [ "4_1_5" ]
+        feature: [ "4_1_5", "4_5_4" ]
 
     steps:
       - run: df -h

@@ -316,16 +316,13 @@ pub fn downloaded_exe_path() -> Result<String, Error> {
     }
 }
 
-/// Returns the daemon executable path if it's provided as a feature or as `ELECTRUMD_EXE` env var.
-/// Returns error if none or both are set
+/// Returns the daemon executable path as specified via `ELECTRUMD_EXE` env var.
+/// Otherwise try to use the downloaded path
 pub fn exe_path() -> Result<String, Error> {
-    match (downloaded_exe_path(), std::env::var("ELECTRUMD_EXE")) {
-        (Ok(_), Ok(_)) => Err(Error::BothFeatureAndEnvVar),
-        (Ok(path), Err(_)) => Ok(path),
-        (Err(_), Ok(path)) => Ok(path),
-        (Err(Error::NoFeature), Err(_)) => Err(Error::NeitherFeatureNorEnvVar),
-        (Err(Error::SkipDownload), Err(_)) => Err(Error::SkipDownload),
-        (Err(_), Err(_)) => unreachable!(),
+    if let Ok(path) = std::env::var("ELECTRUMD_EXE") {
+        Ok(path)
+    } else {
+        downloaded_exe_path()
     }
 }
 

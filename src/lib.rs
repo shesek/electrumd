@@ -64,10 +64,6 @@ pub enum Error {
     NoFeature,
     /// Returned when calling methods requiring a env var to exist, but it's not
     NoEnvVar,
-    /// Returned when calling methods requiring either a feature or env var, but both are absent
-    NeitherFeatureNorEnvVar,
-    /// Returned when calling methods requiring either a feature or anv var, but both are present
-    BothFeatureAndEnvVar,
     /// Returned when expecting an auto-downloaded executable but `BITCOIND_SKIP_DOWNLOAD` env var is set
     SkipDownload,
 }
@@ -81,8 +77,6 @@ impl fmt::Debug for Error {
             Error::Json(e) => write!(f, "{:?}", e),
             Error::NoFeature => write!(f, "Called a method requiring a feature to be set, but it's not"),
             Error::NoEnvVar => write!(f, "Called a method requiring env var `ELECTRUMD_EXE` to be set, but it's not"),
-            Error::NeitherFeatureNorEnvVar =>  write!(f, "Called a method requiring env var `ELECTRUMD_EXE` or a feature to be set, but neither are set"),
-            Error::BothFeatureAndEnvVar => write!(f, "Called a method requiring env var `ELECTRUMD_EXE` or a feature to be set, but both are set"),
             Error::SkipDownload => write!(f, "expecting an auto-downloaded executable but `ELECTRUMD_SKIP_DOWNLOAD` env var is set"),
         }
     }

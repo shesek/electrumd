@@ -3,6 +3,8 @@ use std::fs;
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+#[cfg(target_os = "macos")]
+use std::path::PathBuf;
 use std::str::FromStr;
 
 include!("src/versions.rs");
@@ -70,11 +72,17 @@ fn main() {
         #[cfg(target_os = "macos")]
         {
             let dmg_path = download_dir.join("electrum.dmg");
+            let mount_point = download_dir.join("mounted-dmg");
             fs::write(&dmg_path, &downloaded_bytes).unwrap();
+            fs::create_dir_all(&mount_point).unwrap();
 
             // Mount the DMG (use -nobrowse to keep it out of Finder)
             let output = std::process::Command::new("hdiutil")
-                .args(["attach", dmg_path.to_str().unwrap(), "-nobrowse"])
+                .arg("attach")
+                .arg(&dmg_path)
+                .arg("-mountpoint")
+                .arg(&mount_point)
+                .arg("-nobrowse")
                 .output()
                 .expect("failed to run hdiutil attach");
             assert!(
@@ -82,19 +90,11 @@ fn main() {
                 "hdiutil attach failed: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
-
-            // Parse mount point from hdiutil output (last column of last line)
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let mount_point = stdout
-                .lines()
-                .last()
-                .and_then(|line| line.split('\t').last())
-                .map(|s| s.trim())
-                .expect("failed to parse mount point from hdiutil output");
+            let mounted_dmg = MountedDmg(mount_point);
 
             // Copy the entire Electrum.app bundle out of the DMG
             let app_dest = download_dir.join("Electrum.app");
-            let app_src = Path::new(mount_point).join("Electrum.app");
+            let app_src = mounted_dmg.0.join("Electrum.app");
             let cp_output = std::process::Command::new("cp")
                 .args(["-R", app_src.to_str().unwrap(), app_dest.to_str().unwrap()])
                 .output()
@@ -105,10 +105,7 @@ fn main() {
                 String::from_utf8_lossy(&cp_output.stderr)
             );
 
-            // Detach the mounted DMG
-            let _ = std::process::Command::new("hdiutil")
-                .args(["detach", mount_point])
-                .output();
+            drop(mounted_dmg);
 
             // Clean up the DMG file
             let _ = fs::remove_file(&dmg_path);
@@ -118,5 +115,28 @@ fn main() {
         let mut perms = fs::metadata(&filepath).unwrap().permissions();
         perms.set_mode(0o744);
         fs::set_permissions(&filepath, perms).unwrap();
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct MountedDmg(PathBuf);
+
+#[cfg(target_os = "macos")]
+impl Drop for MountedDmg {
+    fn drop(&mut self) {
+        match std::process::Command::new("hdiutil")
+            .arg("detach")
+            .arg(&self.0)
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                let _ = fs::remove_dir(&self.0);
+            }
+            Ok(output) => eprintln!(
+                "hdiutil detach failed during cleanup: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
+            Err(error) => eprintln!("failed to run hdiutil detach during cleanup: {}", error),
+        }
     }
 }

@@ -1,6 +1,6 @@
 name: Test
 
-on: [pull_request]
+on: [push, pull_request]
 
 env:
   CARGO_TERM_COLOR: always
@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ ubuntu-20.04 ]
+        os: [ ubuntu-20.04, macos-15-intel ]
         feature: [ "4_1_5", "4_5_4", "4_6_2", "4_7_0" ]
 
     steps:
@@ -23,13 +23,13 @@ jobs:
       - uses: Swatinem/rust-cache@v1.2.0
         with:
           key: ${{ matrix.feature }}${{ matrix.os }}
-        if: ${{ matrix.os != 'macos-10.15' }} # issue with hard-links on mac
+        if: ${{ matrix.os != 'macos-15-intel' }} # issue with hard-links on mac
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
       - run: echo "TEMPDIR_ROOT=/dev/shm" >> $GITHUB_ENV
-        if: ${{ matrix.os != 'macos-10.15' }}
+        if: ${{ matrix.os != 'macos-15-intel' }}
       - uses: actions-rs/cargo@v1
         with:
           command: test

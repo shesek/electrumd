@@ -18,8 +18,8 @@ fn download_filename() -> String {
 }
 // other platforms are currently unsupported
 
-fn get_expected_sha256() -> Result<sha256::Hash, ()> {
-    let sha256sum_filename = format!("sha256/electrum-{}-SHA256SUM", &VERSION);
+fn get_expected_sha256(download_filename: &str) -> Result<sha256::Hash, ()> {
+    let sha256sum_filename = format!("sha256/{}-SHA256SUM", download_filename);
     let contents = fs::read_to_string(sha256sum_filename).expect("SHA256SUM file to exists");
     let hash = sha256::Hash::from_str(&contents).expect("SHA256SUM file to be valid");
     Ok(hash)
@@ -30,7 +30,7 @@ fn main() {
         return;
     }
     let download_filename = download_filename();
-    let expected_hash = get_expected_sha256().unwrap();
+    let expected_hash = get_expected_sha256(&download_filename).unwrap();
     let out_dir = std::env::var_os("OUT_DIR").unwrap();
     let download_dir = Path::new(&out_dir)
         .join("electrum")
@@ -59,10 +59,11 @@ fn main() {
             .read_to_end(&mut downloaded_bytes)
             .unwrap();
 
+        let downloaded_hash = sha256::Hash::hash(&downloaded_bytes);
+        assert_eq!(expected_hash, downloaded_hash);
+
         #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
         {
-            let downloaded_hash = sha256::Hash::hash(&downloaded_bytes);
-            assert_eq!(expected_hash, downloaded_hash);
             fs::write(&filepath, downloaded_bytes).unwrap();
         }
 

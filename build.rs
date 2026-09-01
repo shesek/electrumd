@@ -12,7 +12,7 @@ fn download_filename() -> String {
     format!("electrum-{}-x86_64.AppImage", &VERSION)
 }
 
-#[cfg(all(target_os = "macos"))]
+#[cfg(target_os = "macos")]
 fn download_filename() -> String {
     format!("electrum-{}.dmg", &VERSION)
 }

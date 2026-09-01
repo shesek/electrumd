@@ -9,7 +9,7 @@ include!("src/versions.rs");
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn download_filename() -> String {
-    format!("electrum-{}-x86_64.AppImage", &VERSION)
+    format!("electrum-{}-x86_64.AppImage", VERSION)
 }
 
 #[cfg(target_os = "macos")]
@@ -39,7 +39,7 @@ fn main() {
         fs::create_dir_all(&download_dir).unwrap();
     }
 
-    let filepath = download_dir.join("electrum.AppImage");
+    let filepath = download_dir.join(EXE_REL_PATH);
 
     if !filepath.exists() {
         println!(
@@ -103,13 +103,6 @@ fn main() {
                 "cp -R failed: {}",
                 String::from_utf8_lossy(&cp_output.stderr)
             );
-
-            // Symlink electrum.AppImage -> the executable inside the app bundle
-            std::os::unix::fs::symlink(
-                Path::new("Electrum.app").join("Contents").join("MacOS").join("run_electrum"),
-                &filepath,
-            )
-            .expect("failed to create symlink to run_electrum");
 
             // Detach the mounted DMG
             let _ = std::process::Command::new("hdiutil")

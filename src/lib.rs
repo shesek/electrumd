@@ -303,9 +303,10 @@ pub fn downloaded_exe_path() -> Result<String, Error> {
         Err(Error::NoFeature)
     } else {
         Ok(format!(
-            "{}/electrum/electrum-{}/electrum.AppImage",
+            "{}/electrum/electrum-{}/{}",
             env!("OUT_DIR"),
-            versions::VERSION
+            versions::VERSION,
+            versions::EXE_REL_PATH
         ))
     }
 }

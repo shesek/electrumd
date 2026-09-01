@@ -34,7 +34,7 @@ jobs:
         with:
           command: test
           args: --features ${{ matrix.feature }}
-      - run: echo "ELECTRUMD_EXE=$(find ./target/debug -name electrum.AppImage)" >> $GITHUB_ENV
+      - run: echo "ELECTRUMD_EXE=$(find ./target/debug \( -name electrum.AppImage -o -name run_electrum \))" >> $GITHUB_ENV
       - uses: actions-rs/cargo@v1
         with:
           command: test
